@@ -50,6 +50,17 @@ struct variance_multiplies;
 template <typename>
 struct variance_plus;
 
+template <class T, template <class...> class Template>
+struct is_specialization : std::false_type {};
+
+template <template <class...> class Template, class... Args>
+struct is_specialization<Template<Args...>, Template> : std::true_type {};
+
+template <typename, typename, typename>
+class Pixel;
+
+template <typename, typename, typename, typename>
+class UnaryExpr;
 /*
  * Classes to provide utility functions for a "Pixel" to get at image/mask/variance operators
  *
@@ -69,18 +80,15 @@ struct variance_plus;
  */
 
 /// A single %pixel of the same type as a MaskedImage
-template <typename _ImagePixelT, typename _MaskPixelT, typename _VariancePixelT = double>
+template <typename ImagePixelT_, typename MaskPixelT_, typename VariancePixelT_ = double>
 class SinglePixel : public detail::MaskedImagePixel_tag {
 public:
     template <typename, typename, typename>
     friend class Pixel;
-    template <typename T>
-    friend class PixelTypeTraits;
 
-    using ImagePixelT = _ImagePixelT;
-    using MaskPixelT = _MaskPixelT;
-    using VariancePixelT = _VariancePixelT;
-
+    using ImagePixelT = ImagePixelT_;
+    using MaskPixelT = MaskPixelT_;
+    using VariancePixelT = VariancePixelT_;
     SinglePixel(ImagePixelT image, MaskPixelT mask = 0, VariancePixelT variance = 0)
             : _image(image), _mask(mask), _variance(variance) {}
 
@@ -88,48 +96,34 @@ public:
     SinglePixel(rhsExpr const& rhs,
                 // ensure this ctor isn't invoked for simple numeric types, which should use
                 // the overload above.
-                typename std::enable_if<!std::is_fundamental<rhsExpr>::value, void*>::type dummy = nullptr)
+                typename std::enable_if<
+                         is_specialization<rhsExpr,BinaryExpr>{} ||
+                         is_specialization<rhsExpr,Pixel>{} ||
+                         is_specialization<rhsExpr,SinglePixel>{} ||
+                         is_specialization<rhsExpr,UnaryExpr>{}
+                , void>::type* = nullptr)
             : _image(rhs.image()), _mask(rhs.mask()), _variance(rhs.variance()) {}
 
-    ImagePixelT image() const { return _image; }
-    MaskPixelT mask() const { return _mask; }
-    VariancePixelT variance() const { return _variance; }
-
+    inline ImagePixelT image() const { return _image; }
+    inline MaskPixelT mask() const { return _mask; }
+    inline VariancePixelT variance() const { return _variance; }
 private:
     /** Default Ctor
      *
      * Can be called by PixelTypeTraits<SinglePixel>::padValue()
      */
     SinglePixel()
-            : _image(std::numeric_limits<_ImagePixelT>::has_quiet_NaN
-                             ? std::numeric_limits<_ImagePixelT>::quiet_NaN()
+            : _image(std::numeric_limits<ImagePixelT>::has_quiet_NaN
+                             ? std::numeric_limits<ImagePixelT>::quiet_NaN()
                              : 0),
               _mask(0),
-              _variance(std::numeric_limits<_VariancePixelT>::has_quiet_NaN
-                                ? std::numeric_limits<_VariancePixelT>::quiet_NaN()
+              _variance(std::numeric_limits<VariancePixelT>::has_quiet_NaN
+                                ? std::numeric_limits<VariancePixelT>::quiet_NaN()
                                 : 0) {}
 
     ImagePixelT _image;
     MaskPixelT _mask;
     VariancePixelT _variance;
-};
-
-/// Pixel type traits
-template <typename PixelT>
-struct PixelTypeTraits {
-    /// The quantity to use when a pixel value is undefined
-    static inline const PixelT padValue() {
-        return std::numeric_limits<PixelT>::has_quiet_NaN ? std::numeric_limits<PixelT>::quiet_NaN() : 0;
-    }
-};
-
-/// Specialization for a %pixel of a MaskedImage
-template <typename _ImagePixelT, typename _MaskPixelT, typename _VariancePixelT>
-struct PixelTypeTraits<SinglePixel<_ImagePixelT, _MaskPixelT, _VariancePixelT> > {
-    using PixelT = SinglePixel<_ImagePixelT, _MaskPixelT, _VariancePixelT>;
-
-    /// The quantity to use when a pixel value is undefined
-    static inline const PixelT padValue() { return PixelT(); }
 };
 
 /** Return a SinglePixel
@@ -144,18 +138,13 @@ SinglePixel<ImagePixelT, MaskPixelT, VariancePixelT> makeSinglePixel(ImagePixelT
 }
 
 /// A %pixel of a MaskedImage
-template <typename _ImagePixelT, typename _MaskPixelT, typename _VariancePixelT = double>
+template <typename ImagePixelT_, typename MaskPixelT_, typename VariancePixelT_ = double>
 class Pixel : public detail::MaskedImagePixel_tag {
 public:
-    using ImagePixelT = _ImagePixelT;
-    using MaskPixelT = _MaskPixelT;
-    using VariancePixelT = _VariancePixelT;
+    using ImagePixelT = ImagePixelT_;
+    using MaskPixelT = MaskPixelT_;
+    using VariancePixelT = VariancePixelT_;
 
-/// Construct a Pixel from references to its image/mask/variance components
-#if 0
-    Pixel(ImagePixelT& image, MaskPixelT& mask, VariancePixelT& variance) :
-        _image(image), _mask(mask), _variance(variance) {}
-#else
     //
     // This constructor casts away const.  This should be fixed by making const Pixels.
     //
@@ -163,7 +152,6 @@ public:
             : _image(const_cast<ImagePixelT&>(image)),
               _mask(const_cast<MaskPixelT&>(mask)),
               _variance(const_cast<VariancePixelT&>(variance)) {}
-#endif
 
     Pixel(SinglePixel<ImagePixelT, MaskPixelT, VariancePixelT>& rhs)
             : _image(rhs._image), _mask(rhs._mask), _variance(rhs._variance) {}
@@ -172,7 +160,7 @@ public:
     Pixel(Pixel&& rhs) = default;
     ~Pixel() = default;
 
-    Pixel operator=(Pixel const& rhs) {  // the following template won't stop the compiler trying to generate
+    Pixel& operator=(Pixel const& rhs) {  // the following template won't stop the compiler trying to generate
                                          // operator=
         _variance = rhs.variance();      // evaluate before we update image()
         _image = rhs.image();
@@ -186,7 +174,7 @@ public:
      * Pixel expressions;  this is where we evaluate the rhs and set the Pixel's values
      */
     template <typename rhsExpr>
-    Pixel operator=(rhsExpr const& rhs) {
+    Pixel& operator=(rhsExpr const& rhs) {
         _variance = rhs.variance();  // evaluate before we update image()
         _image = rhs.image();
         _mask = rhs.mask();
@@ -194,10 +182,13 @@ public:
         return *this;
     }
     // Delegate to copy-assignment for backwards compatibility
-    Pixel operator=(Pixel&& rhs) { return *this = rhs; }
+    Pixel& operator=(Pixel&& rhs) {
+        *this = rhs;
+        return *this;
+    }
 
     /// set the image part of a Pixel to rhs_image (the mask and variance are set to 0)
-    Pixel operator=(double const& rhs_image) {
+    Pixel& operator=(double const& rhs_image) {
         _image = rhs_image;
         _mask = 0;
         _variance = 0;
@@ -206,7 +197,7 @@ public:
     }
 
     /// set the image part of a Pixel to rhs_image (the mask and variance are set to 0)
-    Pixel operator=(int const& rhs_image) {
+    Pixel& operator=(int const& rhs_image) {
         _image = rhs_image;
         _mask = 0;
         _variance = 0;
@@ -214,11 +205,11 @@ public:
         return *this;
     }
     /// Return the %image part of a Pixel
-    ImagePixelT image() const { return _image; }
+    inline ImagePixelT image() const { return _image; }
     /// Return the mask part of a Pixel
-    MaskPixelT mask() const { return _mask; }
+    inline MaskPixelT mask() const { return _mask; }
     /// Return the variance part of a Pixel
-    VariancePixelT variance() const { return _variance; }
+    inline VariancePixelT variance() const { return _variance; }
     //
     // Logical operators.  We don't need to construct BinaryExpr for them
     // as efficiency isn't a concern.
@@ -232,7 +223,7 @@ public:
     /// Return true iff two pixels are unequal (in at least one of image, mask, and variance)
     template <typename T1>
     friend bool operator!=(Pixel const& lhs, T1 const& rhs) {
-        return !(lhs == rhs);
+        return lhs != rhs;
     }
 
     /// Return a hash of this object.
@@ -395,26 +386,6 @@ struct variance_plus {
     T1 operator()(T1 const&, T1 const&, T1 const& vx) const { return vx; }
 };
 
-/** The variance of the sum of a pair of correlated pixels
- *
- * The covariance is modelled as alpha*sqrt(var_x*var_y)
- *
- * @note We provide a single-operand version for when the right-hand-side of an expression is a scalar, not a
- * masked pixel,
- */
-template <typename T1>
-struct variance_plus_covar {
-    variance_plus_covar(double alpha = 0) : _alpha(alpha) {}
-
-    T1 operator()(T1 const&, T1 const&, T1 const& vx, T1 const& vy) const {
-        return vx + vy + 2 * _alpha * sqrt(vx * vy);
-    }
-    T1 operator()(T1 const&, T1 const&, T1 const& vx) const { return vx; }
-
-private:
-    double _alpha;
-};
-
 /// Class for representing Unary operations
 template <typename ExprT1, typename ImageBinOp, typename MaskBinOp, typename VarianceBinOp>
 class UnaryExpr {
@@ -428,13 +399,13 @@ public:
             : _expr1(e1), _imageOp(imageOp), _maskOp(maskOp), _varOp(varOp) {}
 
     /// evaluate the %image part of the expression
-    ImagePixelT image() const { return _imageOp(_expr1.image()); }
+    inline ImagePixelT image() const { return _imageOp(_expr1.image()); }
 
     /// evaluate the mask part of the expression
-    MaskPixelT mask() const { return _maskOp(_expr1.mask()); }
+    inline MaskPixelT mask() const { return _maskOp(_expr1.mask()); }
 
     /// evaluate the variance part of the expression
-    VariancePixelT variance() const { return _varOp(_expr1.variance()); }
+    inline VariancePixelT variance() const { return _varOp(_expr1.variance()); }
 
 private:
     typename exprTraits<ExprT1>::expr_type _expr1;
@@ -461,13 +432,13 @@ public:
                MaskBinOp maskOp = MaskBinOp(), VarianceBinOp = VarianceBinOp())
             : _expr1(e1), _expr2(e2), _imageOp(imageOp), _maskOp(maskOp), _varOp(VarianceBinOp(alpha)) {}
     /// evaluate the %image part of the expression
-    ImagePixelT image() const { return _imageOp(_expr1.image(), _expr2.image()); }
+    inline ImagePixelT image() const { return _imageOp(_expr1.image(), _expr2.image()); }
 
     /// evaluate the mask part of the expression
-    MaskPixelT mask() const { return _maskOp(_expr1.mask(), _expr2.mask()); }
+    inline MaskPixelT mask() const { return _maskOp(_expr1.mask(), _expr2.mask()); }
 
     /// evaluate the variance part of the expression
-    VariancePixelT variance() const {
+    inline VariancePixelT variance() const {
         return _varOp(_expr1.image(), _expr2.image(), _expr1.variance(), _expr2.variance());
     }
 
@@ -500,13 +471,13 @@ public:
                MaskBinOp maskOp = MaskBinOp(), VarianceBinOp = VarianceBinOp())
             : _expr1(e1), _expr2(e2), _imageOp(imageOp), _maskOp(maskOp), _varOp(VarianceBinOp(alpha)) {}
     /// evaluate the %image part of the expression
-    ImagePixelT image() const { return _imageOp(_expr1.image(), _expr2); }
+    inline ImagePixelT image() const { return _imageOp(_expr1.image(), _expr2); }
 
     /// evaluate the mask part of the expression
-    MaskPixelT mask() const { return _maskOp(_expr1.mask()); }
+    inline MaskPixelT mask() const { return _maskOp(_expr1.mask()); }
 
     /// evaluate the variance part of the expression
-    VariancePixelT variance() const { return _varOp(_expr1.image(), _expr2, _expr1.variance()); }
+    inline VariancePixelT variance() const { return _varOp(_expr1.image(), _expr2, _expr1.variance()); }
 
 private:
     typename exprTraits<ExprT1>::expr_type _expr1;
@@ -528,20 +499,16 @@ operator-(ExprT1 e1) {
 
 //------------------------------------------
 /// Template for (e1 + e2)
-template <class T, template <class...> class Template>
-struct is_specialization : std::false_type {};
 
-template <template <class...> class Template, class... Args>
-struct is_specialization<Template<Args...>, Template> : std::true_type {};
 // avoid invocation with pybind11::detail::descr::operator+ for pybind11 >= 2.3.0
 template <typename ExprT1, typename ExprT2,
    typename = std::enable_if_t <
-          ( std::is_integral<ExprT1>::value  ||
+          ( std::is_integral_v<ExprT1>  ||
             is_specialization<ExprT1,BinaryExpr>{} ||
             is_specialization<ExprT1,SinglePixel>{} ||
             is_specialization<ExprT1,Pixel>{})
             &&
-          ( std::is_integral<ExprT2>::value  ||
+          ( std::is_integral_v<ExprT2>  ||
             is_specialization<ExprT2,BinaryExpr>{} ||
             is_specialization<ExprT2,SinglePixel>{} ||
             is_specialization<ExprT2,Pixel>{} )
@@ -573,16 +540,6 @@ namespace {
 template <typename ExprT1, typename ExprT2>
 ExprT1 doPlus(ExprT1 e1, ExprT2 e2, double const, boost::mpl::true_) {
     return e1 + e2;
-}
-
-template <typename ExprT1, typename ExprT2>
-BinaryExpr<ExprT1, ExprT2, std::plus<typename exprTraits<ExprT1>::ImagePixelT>,
-           bitwise_or<typename exprTraits<ExprT1>::MaskPixelT>,
-           variance_plus_covar<typename exprTraits<ExprT1>::VariancePixelT> >
-doPlus(ExprT1 e1, ExprT2 e2, double const alpha, boost::mpl::false_) {
-    return BinaryExpr<ExprT1, ExprT2, std::plus<typename exprTraits<ExprT1>::ImagePixelT>,
-                      bitwise_or<typename exprTraits<ExprT1>::MaskPixelT>,
-                      variance_plus_covar<typename exprTraits<ExprT1>::VariancePixelT> >(e1, e2, alpha);
 }
 }  // namespace
 

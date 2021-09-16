@@ -256,7 +256,6 @@ BOOST_AUTO_TEST_CASE(
 BOOST_AUTO_TEST_CASE(
         Pixels) { /* parasoft-suppress  LsstDm-3-2a LsstDm-3-4a LsstDm-4-6 LsstDm-5-25 "Boost non-Std" */
     using image::pixel::makeSinglePixel;
-    using image::pixel::plus;  // otherwise we get std::plus even with Koenig lookup
 
     using ImagePixelT = float;
     using MaskPixelT = int;
