@@ -80,10 +80,10 @@ BOOST_AUTO_TEST_CASE(PixelHash) {
     // utils::assertHashesEqual(IntSinglePixel(42, 0, 1.0), IntSinglePixel(42, 0, 1.0));
 
     // Asymmetric cross-class equality needs some special handling
-    BOOST_TEST_REQUIRE(IntPixel(42, 0, 1.0) == FloatPixel(42.0, 0, 1.0));
+    BOOST_TEST_REQUIRE((IntPixel(42, 0, 1.0) == FloatPixel(42.0, 0, 1.0)));
     BOOST_TEST(std::hash<IntPixel>()(IntPixel(42, 0, 1.0)) ==
                std::hash<FloatPixel>()(FloatPixel(42.0, 0, 1.0)));
-    BOOST_TEST_REQUIRE(IntPixel(42, 0, 1.0) == IntSinglePixel(42, 0, 1.0));
+    BOOST_TEST_REQUIRE((IntPixel(42, 0, 1.0) == IntSinglePixel(42, 0, 1.0)));
     BOOST_TEST(std::hash<IntPixel>()(IntPixel(42, 0, 1.0)) ==
                std::hash<IntSinglePixel>()(IntSinglePixel(42, 0, 1.0)));
 }
