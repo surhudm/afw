@@ -71,7 +71,7 @@ int main() {
     afwImage::Image<float> img1(lsst::geom::Extent2I(10, 6));
     afwImage::Image<int> img2(img1.getDimensions());
     // set img1 to 0 (actually, the constructor already did this)
-    lsst::afw::image::for_each_pixel(img1, erase<float>());
+    lsst::afw::image::for_each_pixel(img1, ::erase<float>());
 
     // Set img2 to 10
     lsst::afw::image::for_each_pixel(img2, setVal<int>(10));
