@@ -182,6 +182,265 @@ def plotFocalPlane(camera, fieldSizeDeg_x=0, fieldSizeDeg_y=None, dx=0.1, dy=0.1
         plt.show()
 
 
+def determinePlotScales(values, colorMapName='viridis', scale="sigma", nSigma=3.0):
+    """Function to scale input values by their distribution, and to return
+    a usable colormap.
+
+    Parameters
+    ----------
+    values : `list` [`float`]
+        The values that will be plotted.
+    colorMapName : `str`
+        Name of the matplotlib colormap to use.
+    scale : `str`
+        Scaling to use.  'linear' and 'sigma' scaling types are
+        defined.
+    nSigma : `float`
+        Number of sigma to use in scaling.
+
+    Returns
+    -------
+    colorMap : `ColorMap`
+        The callable colormap.
+
+    Raises
+    ------
+    RuntimeError :
+        Raised if the scale is not a known scaling type.
+    """
+    values = numpy.array(values, dtype=numpy.float32)
+    mask = numpy.isfinite(values)
+
+    if scale == 'linear':
+        vmin = values[mask].min()
+        vmax = values[mask].max()
+    elif scale == 'sigma':
+        q25, q50, q75 = numpy.percentile(values[mask], [25, 50, 75])
+        qSigma = 0.74*q75 - q25
+        vmin = q50 - nSigma*qSigma
+        vmax = q50 + nSigma*qSigma
+    else:
+        raise RuntimeError("Unknown scale parameter: %s" % (scale))
+
+    if vmin == vmax:
+        vmin -= 10
+        vmax += 10
+    return ColorMap(vmin, vmax, colorMapName)
+
+
+class ColorMap():
+    """A colormap for coloring amplifier segments.
+
+    Parameters
+    ----------
+    vmin : `float`
+        Minimum value to color.
+    vmax : `float`
+        Maximum value to color.
+    colorMapName : `str`
+        Matplotlib colormap to pull colors from.
+    """
+    def __init__(self, vmin, vmax, colorMapName):
+        try:
+            from matplotlib import cm
+        except ImportError:
+            raise ImportError(
+                "Can't run plotFocalPlane: matplotlib has not been set up")
+
+        self.vmin = vmin
+        self.vmax = vmax
+        self.cmap = cm.get_cmap(colorMapName, 256)
+        self.bins = numpy.linspace(vmin, vmax, self.cmap.N - 1)
+        self.binLength = len(self.bins)
+
+    def __call__(self, inputValue):
+        """Get a color for a value.
+
+        Parameters
+        ----------
+        inputValue : `float`
+            Value to quantize to a color.
+
+        Returns
+        -------
+        outputValue : `numpy.array`
+            Array containing the RGBA pixel color.
+        """
+        if numpy.isfinite(inputValue):
+            return self.cmap(numpy.digitize([inputValue], self.bins))
+        else:
+            return self.cmap(numpy.digitize([self.vmin - 1000], self.bins))
+
+
+def NestedDictValues(d):
+    """Extract all values from a nested dictionary.
+
+    Parameters
+    ----------
+    d : `dict`
+        A dictionary, possibly contining additional dictionaries.
+
+    Yields
+    -------
+    v : obj
+        Any non-dictionary entries in the input.
+    """
+    for v in d.values():
+        if isinstance(v, dict):
+            yield from NestedDictValues(v)
+        else:
+            yield v
+
+
+def plotAmpFocalPlane(camera, level='DETECTOR', dataValues=None, colorMapName='viridis',
+                      fieldSizeDeg_x=0, fieldSizeDeg_y=None, dx=0.1, dy=0.1, figsize=(10., 10.),
+                      useIds=False, showFig=True, savePath=None):
+    """Plot camera focal plane, optionally coloring the regions by value.
+
+    Parameters
+    ----------
+    camera : `lsst.afw.cameraGeom.Camera`
+        The camera geometry to plot.
+    level : `str`, optional
+        The level to expect data values for.  Should be either
+        'DETECTOR' (the default) or 'AMPLIFIER'.
+    dataValues : `dict` [`str`, `float`], optional
+        Data values to use to color the focal plane segments.  This
+        does not need to contain all detectors or amplifiers.
+    colorMapName : `str`, optional
+        Matplotlib color map to use to color segments.
+    fieldSizeDeg_x : `float`
+        Amount of the field to sample in x in degrees
+    fieldSizeDeg_y : `float` or `None`
+        Amount of the field to sample in y in degrees
+    dx : `float`
+        Spacing of sample points in x in degrees
+    dy : `float`
+        Spacing of sample points in y in degrees
+    figsize : `tuple` containing two `float`
+        Matplotlib style tuple indicating the size of the figure in inches
+    useIds : `bool`
+        Label detectors by name, not id?
+    showFig : `bool`
+        Display the figure on the screen?
+    savePath : `str` or `None`
+        If not `None`, save a copy of the figure to this name.
+    """
+    try:
+        from matplotlib.patches import Polygon
+        from matplotlib.collections import PatchCollection
+        import matplotlib.pyplot as plt
+        from matplotlib import cm
+    except ImportError:
+        raise ImportError(
+            "Can't run plotFocalPlane: matplotlib has not been set up")
+
+    if dataValues:
+        values = list(NestedDictValues(dataValues))
+        colorMap = determinePlotScales(values, colorMapName=colorMapName)
+    else:
+        colorMap = {DetectorType.SCIENCE: 'b', DetectorType.FOCUS: 'y',
+                    DetectorType.GUIDER: 'g', DetectorType.WAVEFRONT: 'r'}
+
+    if fieldSizeDeg_x:
+        if fieldSizeDeg_y is None:
+            fieldSizeDeg_y = fieldSizeDeg_x
+
+        field_gridx, field_gridy = numpy.meshgrid(
+            numpy.arange(0., fieldSizeDeg_x + dx, dx) - fieldSizeDeg_x/2.,
+            numpy.arange(0., fieldSizeDeg_y + dy, dy) - fieldSizeDeg_y/2.)
+        field_gridx, field_gridy = field_gridx.flatten(), field_gridy.flatten()
+    else:
+        field_gridx, field_gridy = [], []
+    xs = []
+    ys = []
+    pcolors = []
+
+    # compute focal plane positions corresponding to field angles field_gridx, field_gridy
+    posFieldAngleList = [lsst.geom.Point2D(x*lsst.geom.radians, y*lsst.geom.radians)
+                         for x, y in zip(field_gridx, field_gridy)]
+    posFocalPlaneList = camera.transform(posFieldAngleList, FIELD_ANGLE, FOCAL_PLANE)
+    for posFocalPlane in posFocalPlaneList:
+        xs.append(posFocalPlane.getX())
+        ys.append(posFocalPlane.getY())
+        dets = camera.findDetectors(posFocalPlane, FOCAL_PLANE)
+        if len(dets) > 0:
+            pcolors.append('w')
+        else:
+            pcolors.append('k')
+
+    patches = []
+    colors = []
+    plt.figure(figsize=figsize)
+    ax = plt.gca()
+    xvals = []
+    yvals = []
+
+    for det in camera:
+        corners = [(c.getX(), c.getY()) for c in det.getCorners(FOCAL_PLANE)]
+        for corner in corners:
+            xvals.append(corner[0])
+            yvals.append(corner[1])
+        if level == 'DETECTOR':
+            if dataValues:
+                colors.append(colorMap(dataValues.get(det.getName(), numpy.nan)))
+            else:
+                colors.append(colorMap[det.getType()])
+            patches.append(Polygon(corners, True))
+            center = det.getOrientation().getFpPosition()
+            ax.text(center.getX(), center.getY(), det.getId() if useIds else det.getName(),
+                    horizontalalignment='center', size=6)
+        elif level == 'AMPLIFIER':
+            corners = numpy.array(corners)
+            minU, minV = corners.min(axis=0)
+            maxU, maxV = corners.max(axis=0)
+            minX, minY = det.getBBox().getMin()
+            maxX, maxY = det.getBBox().getMax()
+
+            scaleX = (maxU - minU)/(maxX - minX)
+            scaleY = (maxV - minV)/(maxY - minY)
+
+            for amp in det.getAmplifiers():
+                # This is for the unrotated detector case.
+                ampMinX, ampMinY = amp.getBBox().getMin()
+                ampMaxX, ampMaxY = amp.getBBox().getMax()
+                ampCorners = []
+
+                ampCorners.append((scaleX * (ampMinX - minX) + minU,
+                                   scaleY * (ampMinY - minY) + minV))
+                ampCorners.append((scaleX * (ampMaxX - minX) + minU,
+                                   scaleY * (ampMinY - minY) + minV))
+                ampCorners.append((scaleX * (ampMaxX - minX) + minU,
+                                   scaleY * (ampMaxY - minY) + minV))
+                ampCorners.append((scaleX * (ampMinX - minX) + minU,
+                                   scaleY * (ampMaxY - minY) + minV))
+
+                if dataValues:
+                    colors.append(colorMap(dataValues.get(det.getName(), {}).get(amp.getName(), numpy.nan)))
+                else:
+                    colors.append('c')
+                patches.append(Polygon(ampCorners, True))
+
+    patchCollection = PatchCollection(patches, alpha=0.6, facecolor=colors, edgecolor='black')
+    ax.add_collection(patchCollection)
+    ax.scatter(xs, ys, s=10, alpha=.7, linewidths=0., c=pcolors)
+    ax.set_xlim(min(xvals) - abs(0.1*min(xvals)),
+                max(xvals) + abs(0.1*max(xvals)))
+    ax.set_ylim(min(yvals) - abs(0.1*min(yvals)),
+                max(yvals) + abs(0.1*max(yvals)))
+    ax.set_xlabel('Focal Plane X (mm)')
+    ax.set_ylabel('Focal Plane Y (mm)')
+
+    if dataValues:
+        mapper = cm.ScalarMappable(norm=None, cmap=colorMap.cmap)
+        mapper.set_clim(colorMap.vmin, colorMap.vmax)
+        plt.colorbar(mappable=mapper, ax=ax)
+    if savePath is not None:
+        plt.savefig(savePath)
+    if showFig:
+        plt.show()
+
+
 def makeImageFromAmp(amp, imValue=None, imageFactory=afwImage.ImageU, markSize=10, markValue=0,
                      scaleGain=lambda gain: (gain*1000)//10):
     """Make an image from an amp object.
