@@ -585,7 +585,7 @@ class FunctionTestCase(lsst.utils.tests.TestCase):
                                     f(x), predVal, x, params,
                                     "params constructor")
                 self.assertFloatsAlmostEqual(
-                    f(x), predVal, msg=msg, atol=self.atol, rtol=None)
+                    f(x), predVal, msg=msg, atol=self.atol, rtol=1E-13)
                 msg = errMsg.format(type(g).__name__,
                                     g(x), predVal, x, params,
                                     "order constructor")
